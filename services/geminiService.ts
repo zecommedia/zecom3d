@@ -200,3 +200,204 @@ export const analyzeInsights = async (keyword: string, images: ImageFile[]): Pro
     throw new Error("Lỗi phân tích: " + error.message);
   }
 };
+
+// Base pattern prompt template - used by all pattern generation functions
+const getPatternPromptTemplate = () => `
+CRITICAL LAYOUT REQUIREMENTS FOR 3D T-SHIRT PATTERN:
+Create a full-bleed, fabric-style continuous artwork in 16:9 aspect ratio without borders, margins, or padding.
+The design must touch all four edges and fill completely without centering or leaving safe margins.
+
+The composition must be ONE continuous artwork visually organized into THREE EQUAL VERTICAL AREAS:
+- LEFT third (33%): Design for BACK of the shirt - feature a subject close-up or expressive pose with strong visual presence
+- CENTER third (33%): Design for FRONT of the shirt - main focal point, intentionally SMALL and RESTRAINED (~10% of canvas area)
+- RIGHT third (33%): Design for SLEEVES (both arms) - themed secondary elements with balanced density
+
+MANDATORY RULES:
+- NO background color changes, lines, panels, frames, or visible separations between sections
+- ONE consistent color palette across the entire canvas
+- Bold illustrated mascot/graphic style with clean thick outlines
+- Strictly non-photorealistic and non-stock-photo
+- Background elements must flow vertically or organically
+- Highlights allowed only inside illustrated elements
+
+FORBIDDEN ELEMENTS:
+- Technical text, labels, notes, dimensions, diagrams, guides
+- Mockups, unequal thirds, variable gaps, letterbox bars
+- Visible separations, standalone letters, decorative words (unless fully integrated)
+`;
+
+// Redesign pattern - chỉnh sửa pattern hiện tại dựa trên prompt
+export const redesignPattern = async (
+  currentPatternBase64: string,
+  editPrompt: string
+): Promise<string> => {
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  
+  const parts = [{
+    inlineData: {
+      data: currentPatternBase64.split(',')[1],
+      mimeType: 'image/png',
+    },
+  }];
+
+  const prompt = `
+    You are an expert apparel pattern designer. 
+    
+    CURRENT PATTERN is attached. Please EDIT this pattern based on the following request:
+    "${editPrompt}"
+    
+    IMPORTANT: Apply the edit while MAINTAINING the correct pattern structure:
+    ${getPatternPromptTemplate()}
+    
+    - Keep the overall style and color palette consistent with the original
+    - Only modify elements mentioned in the edit request
+    - Output ONE edited pattern image
+  `;
+
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash-image',
+      contents: {
+        parts: [...parts, { text: prompt }],
+      },
+      config: {
+        imageConfig: {
+          aspectRatio: "16:9"
+        }
+      }
+    });
+
+    let base64Image = "";
+    if (response.candidates && response.candidates[0].content.parts) {
+      for (const part of response.candidates[0].content.parts) {
+        if (part.inlineData) {
+          base64Image = `data:image/png;base64,${part.inlineData.data}`;
+          break;
+        }
+      }
+    }
+
+    if (!base64Image) {
+      throw new Error("AI không trả về kết quả ảnh.");
+    }
+    return base64Image;
+  } catch (error: any) {
+    throw new Error("Lỗi Redesign: " + error.message);
+  }
+};
+
+// Creative mode - tạo prompt mới từ prompt cũ và yêu cầu chỉnh sửa
+export const creativePattern = async (
+  originalTheme: string,
+  editPrompt: string
+): Promise<string> => {
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  
+  const combinedPrompt = `
+    Create ONE single finished illustrated artwork for cut-and-sew / all-over print apparel.
+    
+    ORIGINAL THEME: ${originalTheme}
+    USER MODIFICATION REQUEST: ${editPrompt}
+    
+    Combine the original theme with the user's modification to create a NEW, CREATIVE pattern.
+    
+    ${getPatternPromptTemplate()}
+    
+    Output ONE image.
+  `;
+
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-3-pro-image-preview',
+      contents: {
+        parts: [{ text: combinedPrompt }],
+      },
+      config: {
+        imageConfig: {
+          aspectRatio: "16:9",
+          imageSize: "1K"
+        }
+      }
+    });
+
+    let base64Image = "";
+    if (response.candidates && response.candidates[0].content.parts) {
+      for (const part of response.candidates[0].content.parts) {
+        if (part.inlineData) {
+          base64Image = `data:image/png;base64,${part.inlineData.data}`;
+          break;
+        }
+      }
+    }
+
+    if (!base64Image) {
+      throw new Error("AI không trả về kết quả ảnh.");
+    }
+    return base64Image;
+  } catch (error: any) {
+    throw new Error("Lỗi Creative: " + error.message);
+  }
+};
+
+// Clone mockup to pattern - chuyển từ mockup 3D sang pattern
+export const cloneMockupToPattern = async (
+  mockupImageBase64: string
+): Promise<string> => {
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  
+  const parts = [{
+    inlineData: {
+      data: mockupImageBase64.split(',')[1],
+      mimeType: 'image/png',
+    },
+  }];
+
+  const prompt = `
+    Analyze this T-shirt mockup/design image and RECREATE it as a FLAT PATTERN for cut-and-sew / all-over print production.
+    
+    YOUR TASK:
+    1. Extract the design/artwork/style from the input image
+    2. Recreate it following the EXACT pattern structure below
+    
+    ${getPatternPromptTemplate()}
+    
+    ADDITIONAL REQUIREMENTS:
+    - Match the style, colors, and theme from the input image as closely as possible
+    - If input is a mockup, extract only the design elements (ignore the shirt/model)
+    - If input is already a pattern/design, adapt it to fit the 3-section layout
+    
+    Output ONE 16:9 pattern image.
+  `;
+
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-3-pro-image-preview',
+      contents: {
+        parts: [...parts, { text: prompt }],
+      },
+      config: {
+        imageConfig: {
+          aspectRatio: "16:9",
+          imageSize: "1K"
+        }
+      }
+    });
+
+    let base64Image = "";
+    if (response.candidates && response.candidates[0].content.parts) {
+      for (const part of response.candidates[0].content.parts) {
+        if (part.inlineData) {
+          base64Image = `data:image/png;base64,${part.inlineData.data}`;
+          break;
+        }
+      }
+    }
+
+    if (!base64Image) {
+      throw new Error("AI không trả về kết quả ảnh.");
+    }
+    return base64Image;
+  } catch (error: any) {
+    throw new Error("Lỗi Clone: " + error.message);
+  }
+};

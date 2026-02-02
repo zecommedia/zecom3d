@@ -1,13 +1,14 @@
 
 import React, { useState, useEffect, useRef, Suspense, lazy, useCallback } from 'react';
 import { ImageFile, BatchItem, ImageAdjustments } from './types';
-import { generatePodImage, analyzeInsights } from './services/geminiService';
+import { generatePodImage, analyzeInsights, redesignPattern, creativePattern, cloneMockupToPattern } from './services/geminiService';
 import JSZip from 'jszip';
 
 // Lazy load 3D viewer
 const TShirt3DViewer = lazy(() => import('./components/TShirt3DViewer'));
 
 type ViewMode = '3D'; // Only 3D mode now
+type WorkspaceMode = 'generate' | 'clone'; // Generate or Clone workspace
 
 const EditModal: React.FC<{
   image: string;
@@ -165,12 +166,27 @@ const Lightbox: React.FC<{ image: string; onClose: () => void }> = ({ image, onC
 
 const App: React.FC = () => {
   const [viewMode, setViewMode] = useState<ViewMode>('3D');
+  const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>('generate');
   
   // Only keep 3D batches
   const [batches3D, setBatches3D] = useState<BatchItem[]>([]);
   
   // Current image for 3D preview
   const [current3DImage, setCurrent3DImage] = useState<string | null>(null);
+  
+  // Current theme name for creative mode
+  const [currentThemeName, setCurrentThemeName] = useState<string>('');
+  
+  // Edit panel state
+  const [showEditPanel, setShowEditPanel] = useState(false);
+  const [editPrompt, setEditPrompt] = useState('');
+  const [editMode, setEditMode] = useState<'redesign' | 'creative'>('redesign');
+  const [isEditing, setIsEditing] = useState(false);
+  
+  // Clone workspace state
+  const [cloneImage, setCloneImage] = useState<string | null>(null);
+  const [clonedPattern, setClonedPattern] = useState<string | null>(null);
+  const [isCloning, setIsCloning] = useState(false);
   
   // Resizable columns - left column width percentage (30-70%)
   const [leftColumnWidth, setLeftColumnWidth] = useState(50);
@@ -314,10 +330,7 @@ const App: React.FC = () => {
     e.target.value = '';
     setActiveBatches(p => [...p, ...newBatches]);
     
-    // Auto set first result to 3D preview when available
-    if (newBatches.length > 0 && newBatches[0].images.length > 0) {
-      setCurrent3DImage(newBatches[0].images[0].base64);
-    }
+    // Don't auto show 3D preview - user must click "SHOW 3D" button after generating
   };
 
   const processBatch = async (batchId: string, mode: 'normal' | 'pro' | 'white' | 'pattern') => {
@@ -365,9 +378,9 @@ const App: React.FC = () => {
         return b;
       }));
       
-      // Auto apply to 3D when pattern is generated
+      // Save theme name for creative mode (but don't auto apply to 3D - user must click "SHOW 3D")
       if (mode === 'pattern' && resUrls.length > 0) {
-        setCurrent3DImage(resUrls[0]);
+        setCurrentThemeName(batch.name);
       }
     } catch (err: any) {
       if (err.message.includes("PRO_KEY_REQUIRED")) { handleConnectKey(); }
@@ -433,6 +446,108 @@ const App: React.FC = () => {
     link.click();
   };
 
+  // Handle edit pattern (redesign or creative mode)
+  const handleEditPattern = async (mode: 'redesign' | 'creative') => {
+    if (!editPrompt.trim() || !current3DImage) return;
+    
+    setEditMode(mode);
+    setIsEditing(true);
+    try {
+      let newPattern: string;
+      
+      if (mode === 'redesign') {
+        // Redesign: use current pattern + edit prompt
+        newPattern = await redesignPattern(current3DImage, editPrompt);
+      } else {
+        // Creative: combine original theme with edit prompt to create new pattern
+        newPattern = await creativePattern(currentThemeName || 'abstract design', editPrompt);
+      }
+      
+      // Apply new pattern to 3D model
+      setCurrent3DImage(null);
+      setTimeout(() => setCurrent3DImage(newPattern), 50);
+      setEditPrompt('');
+      setShowEditPanel(false);
+    } catch (err: any) {
+      alert("Lỗi: " + err.message);
+    } finally {
+      setIsEditing(false);
+    }
+  };
+
+  // Handle clone mockup to pattern (only generate, don't auto apply)
+  const handleCloneMockup = async () => {
+    if (!cloneImage) return;
+    
+    setIsCloning(true);
+    setClonedPattern(null);
+    try {
+      const pattern = await cloneMockupToPattern(cloneImage);
+      setClonedPattern(pattern);
+    } catch (err: any) {
+      alert("Lỗi Clone: " + err.message);
+    } finally {
+      setIsCloning(false);
+    }
+  };
+
+  // Handle apply cloned pattern to 3D
+  const handleApplyClonedPattern = () => {
+    if (!clonedPattern) return;
+    setCurrent3DImage(null);
+    setTimeout(() => setCurrent3DImage(clonedPattern), 50);
+  };
+
+  // Handle clone image drop
+  const handleCloneImageDrop = async (e: React.DragEvent) => {
+    e.preventDefault();
+    const files = Array.from(e.dataTransfer.files);
+    if (files.length > 0 && files[0].type.startsWith('image/')) {
+      const base64 = await fileToBase64(files[0]);
+      setCloneImage(base64);
+      setClonedPattern(null); // Reset cloned pattern when new image is dropped
+    }
+  };
+
+  // Handle paste image for clone
+  useEffect(() => {
+    const handlePaste = async (e: ClipboardEvent) => {
+      if (workspaceMode !== 'clone') return;
+      
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      
+      for (const item of Array.from(items)) {
+        if (item.type.startsWith('image/')) {
+          const file = item.getAsFile();
+          if (file) {
+            const base64 = await fileToBase64(file);
+            setCloneImage(base64);
+            setClonedPattern(null); // Reset cloned pattern when new image is pasted
+          }
+          break;
+        }
+      }
+    };
+    
+    document.addEventListener('paste', handlePaste);
+    return () => document.removeEventListener('paste', handlePaste);
+  }, [workspaceMode]);
+
+  const handleCloneImageSelect = async () => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/*';
+    input.onchange = async (e: any) => {
+      if (e.target.files[0]) {
+        const base64 = await fileToBase64(e.target.files[0]);
+        setCloneImage(base64);
+        setClonedPattern(null); // Reset cloned pattern when new image is selected
+      }
+    };
+    input.click();
+  };
+
   const onEditRegenerate = async (prompt: string, currentImage: string) => {
     if (!editTarget) return;
     try {
@@ -491,22 +606,137 @@ const App: React.FC = () => {
          <div className="w-10 h-10 bg-violet-600 rounded-xl flex items-center justify-center text-white font-black text-lg">3D</div>
          <nav className="flex flex-col gap-6">
             <button 
-              title="3D Pattern Workspace"
-              className="w-12 h-12 rounded-2xl flex flex-col items-center justify-center transition-all bg-violet-50 text-violet-600 border border-violet-100 shadow-sm"
+              onClick={() => setWorkspaceMode('generate')}
+              title="Generate Workspace"
+              className={`w-12 h-12 rounded-2xl flex flex-col items-center justify-center transition-all ${workspaceMode === 'generate' ? 'bg-violet-50 text-violet-600 border border-violet-100 shadow-sm' : 'text-slate-400 hover:bg-slate-50'}`}
             >
                <svg className="w-5 h-5 mb-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/></svg>
-               <span className="text-[7px] font-black">3D</span>
+               <span className="text-[7px] font-black">GEN</span>
+            </button>
+            <button 
+              onClick={() => setWorkspaceMode('clone')}
+              title="Clone Workspace"
+              className={`w-12 h-12 rounded-2xl flex flex-col items-center justify-center transition-all ${workspaceMode === 'clone' ? 'bg-emerald-50 text-emerald-600 border border-emerald-100 shadow-sm' : 'text-slate-400 hover:bg-slate-50'}`}
+            >
+               <svg className="w-5 h-5 mb-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
+               <span className="text-[7px] font-black">CLONE</span>
             </button>
          </nav>
       </aside>
 
-      <main className="flex-1 ml-20 pb-20">
-        <div className="flex relative">
+      <main className="flex-1 ml-20 pb-20" style={{ width: 'calc(100% - 80px)' }}>
+        <div className="flex relative" style={{ width: '100%' }}>
           {/* LEFT COLUMN - Inputs & Insights */}
           <div 
             style={{ width: `${leftColumnWidth}%` }} 
             className="min-h-screen overflow-y-auto px-6 pt-10 pb-20 custom-scrollbar transition-[width] duration-75"
           >
+          
+          {/* CLONE WORKSPACE */}
+          {workspaceMode === 'clone' && (
+            <div className="space-y-8">
+              <div className="bg-white p-6 rounded-[32px] shadow-sm border border-slate-100 flex flex-wrap items-center justify-between gap-6 mb-8">
+                <div className="flex items-center gap-5">
+                   <div className="w-12 h-12 rounded-2xl flex items-center justify-center text-white font-black text-xl shadow-lg bg-emerald-600">
+                     <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
+                   </div>
+                   <div>
+                     <h1 className="text-xl font-black text-slate-900 uppercase leading-none mb-1">
+                        CLONE <span className="text-slate-400">MOCKUP</span>
+                     </h1>
+                     <p className="text-[9px] font-bold text-slate-400 uppercase tracking-[0.2em]">CONVERT 3D MOCKUP TO PATTERN</p>
+                   </div>
+                </div>
+              </div>
+              
+              {/* Drop zone for mockup */}
+              <div 
+                onDragOver={handleDragOver}
+                onDrop={handleCloneImageDrop}
+                onClick={handleCloneImageSelect}
+                className={`bg-white rounded-[40px] border-4 border-dashed p-12 flex flex-col items-center justify-center min-h-[400px] cursor-pointer transition-all hover:border-emerald-300 ${cloneImage ? 'border-emerald-300' : 'border-slate-200'}`}
+              >
+                {cloneImage ? (
+                  <div className="relative group">
+                    <img src={cloneImage} className="max-w-full max-h-[350px] object-contain rounded-2xl shadow-lg" />
+                    <button 
+                      onClick={(e) => { e.stopPropagation(); setCloneImage(null); setClonedPattern(null); }}
+                      className="absolute top-4 right-4 bg-red-500 text-white p-2 rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M6 18L18 6M6 6l12 12"/></svg>
+                    </button>
+                  </div>
+                ) : (
+                  <>
+                    <div className="w-24 h-24 bg-emerald-50 rounded-full flex items-center justify-center mb-6">
+                      <svg className="w-12 h-12 text-emerald-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+                    </div>
+                    <h3 className="text-xl font-black text-slate-400 uppercase tracking-tight mb-2">Drop Mockup Image Here</h3>
+                    <p className="text-sm text-slate-400">or click to browse</p>
+                  </>
+                )}
+              </div>
+              
+              {/* Clone button */}
+              {cloneImage && !clonedPattern && (
+                <button 
+                  onClick={handleCloneMockup}
+                  disabled={isCloning}
+                  className="w-full bg-emerald-600 text-white py-5 rounded-2xl font-black text-sm uppercase tracking-widest shadow-lg shadow-emerald-100 hover:bg-emerald-700 transition-all disabled:opacity-50 flex items-center justify-center gap-3"
+                >
+                  {isCloning ? (
+                    <>
+                      <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                      CLONING TO PATTERN...
+                    </>
+                  ) : (
+                    <>
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+                      CLONE TO PATTERN
+                    </>
+                  )}
+                </button>
+              )}
+              
+              {/* Apply to 3D button (shown after cloning) */}
+              {clonedPattern && (
+                <div className="flex gap-3">
+                  <button 
+                    onClick={handleApplyClonedPattern}
+                    className="flex-1 bg-violet-600 text-white py-5 rounded-2xl font-black text-sm uppercase tracking-widest shadow-lg shadow-violet-100 hover:bg-violet-700 transition-all flex items-center justify-center gap-3"
+                  >
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/></svg>
+                    SHOW 3D
+                  </button>
+                  <button 
+                    onClick={() => setClonedPattern(null)}
+                    className="px-5 py-5 bg-slate-100 text-slate-500 rounded-2xl font-black text-sm uppercase hover:bg-red-50 hover:text-red-500 transition-all"
+                  >
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                  </button>
+                </div>
+              )}
+              
+              {/* Instructions */}
+              <div className="bg-slate-50 rounded-3xl p-8 border border-slate-100">
+                <h4 className="text-sm font-black text-slate-600 uppercase mb-4">How it works</h4>
+                <ol className="space-y-3 text-sm text-slate-500">
+                  <li className="flex items-start gap-3">
+                    <span className="bg-emerald-100 text-emerald-600 w-6 h-6 rounded-full flex items-center justify-center font-black text-xs shrink-0">1</span>
+                    <span>Drop a T-shirt mockup image (photo or render)</span>
+                  </li>
+                  <li className="flex items-start gap-3">
+                    <span className="bg-emerald-100 text-emerald-600 w-6 h-6 rounded-full flex items-center justify-center font-black text-xs shrink-0">2</span>
+                    <span>AI will analyze the design and recreate it as a 3D Preview</span>
+                  </li>
+                </ol>
+              </div>
+            </div>
+          )}
+          
+          {/* GENERATE WORKSPACE */}
+          {workspaceMode === 'generate' && (
+            <>
           <div className="bg-white p-6 rounded-[32px] shadow-sm border border-slate-100 flex flex-wrap items-center justify-between gap-6 mb-8">
             <div className="flex items-center gap-5">
                <div className="w-12 h-12 rounded-2xl flex items-center justify-center text-white font-black text-xl shadow-lg bg-violet-600">
@@ -613,8 +843,7 @@ const App: React.FC = () => {
                   {/* GENERATE BUTTON */}
                   <div className="flex items-center justify-between border-b border-violet-100 pb-4">
                     <div className="flex items-center gap-3">
-                      <label className="text-[10px] font-black text-violet-500 uppercase tracking-[0.2em]">GENERATE 3D PATTERN</label>
-                        <span className="bg-violet-100 text-violet-600 text-[8px] px-2 py-0.5 rounded-full font-black">16:9 - 1K</span>
+                      <label className="text-[10px] font-black text-violet-500 uppercase tracking-[0.2em]">GENERATE 3D DESIGN</label>
                     </div>
                     <div className="flex gap-2">
                       <button 
@@ -631,11 +860,15 @@ const App: React.FC = () => {
                       </button>
                       {batch.resultsPattern.length > 0 && (
                         <button 
-                          onClick={() => setCurrent3DImage(batch.resultsPattern[0])} 
+                          onClick={() => {
+                            // Force re-trigger by setting null first, then the image
+                            setCurrent3DImage(null);
+                            setTimeout(() => setCurrent3DImage(batch.resultsPattern[0]), 50);
+                          }} 
                           className="bg-emerald-600 text-white px-6 py-3 rounded-xl text-[10px] font-black uppercase flex items-center gap-2"
                         >
                           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
-                          APPLY TO 3D
+                          SHOW 3D
                         </button>
                       )}
                     </div>
@@ -686,6 +919,8 @@ const App: React.FC = () => {
               </div>
             )}
           </div>
+          </>
+          )}
           </div>
           
           {/* RESIZABLE DIVIDER */}
@@ -699,7 +934,7 @@ const App: React.FC = () => {
           
           {/* RIGHT COLUMN - Fixed 3D T-Shirt Viewer */}
           <div 
-            style={{ width: `${100 - leftColumnWidth}%` }} 
+            style={{ width: `calc((100vw - 80px) * ${(100 - leftColumnWidth) / 100})` }} 
             className="h-screen fixed top-0 right-0 p-6 bg-white border-l border-slate-100 flex flex-col z-30 transition-[width] duration-75"
           >
             <div className="flex items-center justify-between mb-4">
@@ -715,30 +950,102 @@ const App: React.FC = () => {
                   {Math.round(leftColumnWidth)}% / {Math.round(100 - leftColumnWidth)}%
                 </span>
                 {current3DImage && (
-                  <button 
-                    onClick={() => setCurrent3DImage(null)} 
-                    className="text-[10px] font-black uppercase text-slate-400 hover:text-red-500"
-                  >
-                    Reset
-                  </button>
+                  <>
+                    <button 
+                      onClick={() => setShowEditPanel(true)} 
+                      className="bg-indigo-600 text-white px-4 py-2 rounded-xl text-[10px] font-black uppercase flex items-center gap-2 hover:bg-indigo-700 transition-all"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
+                      Edit
+                    </button>
+                    <button 
+                      onClick={() => setCurrent3DImage(null)} 
+                      className="text-[10px] font-black uppercase text-slate-400 hover:text-red-500"
+                    >
+                      Reset
+                    </button>
+                  </>
                 )}
               </div>
             </div>
             
-            <div className="flex-1 rounded-3xl overflow-hidden">
-              <Suspense fallback={
-                <div className="w-full h-full bg-slate-100 rounded-3xl flex items-center justify-center">
-                  <div className="text-center">
-                    <div className="w-12 h-12 border-4 border-violet-200 border-t-violet-600 rounded-full animate-spin mx-auto mb-4" />
-                    <span className="text-xs font-black uppercase tracking-widest text-slate-400">Loading 3D Model...</span>
+            <div className="flex-1 rounded-3xl overflow-hidden relative">
+              {current3DImage ? (
+                <Suspense fallback={
+                  <div className="w-full h-full bg-slate-100 rounded-3xl flex items-center justify-center">
+                    <div className="text-center">
+                      <div className="w-12 h-12 border-4 border-violet-200 border-t-violet-600 rounded-full animate-spin mx-auto mb-4" />
+                      <span className="text-xs font-black uppercase tracking-widest text-slate-400">Loading 3D Model...</span>
+                    </div>
+                  </div>
+                }>
+                  <TShirt3DViewer 
+                    newImageBase64={current3DImage} 
+                    onApplyComplete={() => console.log('Applied to 3D model')}
+                  />
+                </Suspense>
+              ) : (
+                <div className="w-full h-full bg-gradient-to-br from-slate-50 to-slate-100 rounded-3xl flex flex-col items-center justify-center">
+                  <div className="w-32 h-32 bg-white rounded-full flex items-center justify-center mb-8 shadow-sm border border-slate-100">
+                    <svg className="w-16 h-16 text-slate-200" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/></svg>
+                  </div>
+                  <h3 className="text-xl font-black text-slate-300 uppercase tracking-tight mb-2">No Pattern Applied</h3>
+                  <p className="text-sm text-slate-400 text-center max-w-xs">Generate a 3D pattern from the left panel or use Clone workspace to convert a mockup</p>
+                </div>
+              )}
+              
+              {/* Edit Panel Bubble - Small floating panel */}
+              {showEditPanel && current3DImage && (
+                <div className="absolute bottom-4 right-4 w-80 bg-white rounded-2xl shadow-2xl border border-slate-200 z-50 animate-in fade-in slide-in-from-bottom-4 duration-200">
+                  {/* Header */}
+                  <div className="flex items-center justify-between p-3 border-b border-slate-100">
+                    <h3 className="text-xs font-black text-slate-900 uppercase flex items-center gap-2">
+                      <svg className="w-4 h-4 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
+                      Edit Pattern
+                    </h3>
+                    <button onClick={() => setShowEditPanel(false)} className="p-1 hover:bg-slate-100 rounded-full">
+                      <svg className="w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                    </button>
+                  </div>
+                  
+                  {/* Content */}
+                  <div className="p-3 space-y-3">
+                    {/* Edit prompt */}
+                    <textarea 
+                      value={editPrompt}
+                      onChange={(e) => setEditPrompt(e.target.value)}
+                      placeholder="e.g., xóa text ở mặt trước, đổi màu áo sang đỏ..."
+                      className="w-full h-20 bg-slate-50 border border-slate-100 rounded-xl p-3 text-xs resize-none focus:ring-2 focus:ring-indigo-500 outline-none"
+                    />
+                    
+                    {/* Action buttons */}
+                    <div className="flex gap-2">
+                      <button 
+                        onClick={() => handleEditPattern('redesign')}
+                        disabled={isEditing || !editPrompt.trim()}
+                        className="flex-1 py-2.5 rounded-xl font-black text-[10px] uppercase tracking-wider transition-all flex items-center justify-center gap-2 disabled:opacity-50 bg-indigo-600 text-white hover:bg-indigo-700"
+                      >
+                        {isEditing && editMode === 'redesign' ? (
+                          <div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                        ) : (
+                          <>🎨 Redesign</>
+                        )}
+                      </button>
+                      <button 
+                        onClick={() => handleEditPattern('creative')}
+                        disabled={isEditing || !editPrompt.trim()}
+                        className="flex-1 py-2.5 rounded-xl font-black text-[10px] uppercase tracking-wider transition-all flex items-center justify-center gap-2 disabled:opacity-50 bg-violet-600 text-white hover:bg-violet-700"
+                      >
+                        {isEditing && editMode === 'creative' ? (
+                          <div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                        ) : (
+                          <>✨ Creative</>
+                        )}
+                      </button>
+                    </div>
                   </div>
                 </div>
-              }>
-                <TShirt3DViewer 
-                  newImageBase64={current3DImage} 
-                  onApplyComplete={() => console.log('Applied to 3D model')}
-                />
-              </Suspense>
+              )}
             </div>
           </div>
         </div>
@@ -777,7 +1084,9 @@ const App: React.FC = () => {
         .custom-scrollbar::-webkit-scrollbar-thumb { background: #CBD5E1; border-radius: 20px; border: 2px solid #F1F5F9; }
         .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #94A3B8; }
         @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+        @keyframes slide-in-from-bottom { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
         .animate-in { animation: fade-in 0.2s ease-out forwards; }
+        .slide-in-from-bottom-4 { animation: slide-in-from-bottom 0.2s ease-out forwards; }
       `}</style>
     </div>
   );

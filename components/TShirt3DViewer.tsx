@@ -588,7 +588,7 @@ const TShirt3DViewer: React.FC<TShirt3DViewerProps> = ({ newImageBase64, onApply
           image: backCropped,
           visible: true,
           position: [0, 0, -0.12],
-          rotation: [0.008407346410207, 0.008407346410207, 0.058407346410207],
+          rotation: [0, 0, 0],
           scale: [0.35, 0.75, 0.2],
           borderRadius: 0,
           layerType: 'image',
@@ -602,8 +602,8 @@ const TShirt3DViewer: React.FC<TShirt3DViewerProps> = ({ newImageBase64, onApply
           id: 4,  // Fixed ID
           image: frontCropped,
           visible: true,
-          position: [0, 0, 0.07],
-          rotation: [0.008407346410207, 0.008407346410207, 0.008407346410207],
+          position: [0.012, 0, 0.07],
+          rotation: [0, 0, 0],
           scale: [0.35, 0.7, 0.2],
           borderRadius: 0,
           layerType: 'image',
@@ -660,7 +660,7 @@ const TShirt3DViewer: React.FC<TShirt3DViewerProps> = ({ newImageBase64, onApply
       )}
       
       <Canvas
-        camera={{ position: [0, 0, 2], fov: 25 }}
+        camera={{ position: [0, 0, 20], fov: 25 }}
         gl={{ preserveDrawingBuffer: true }}
         className="w-full h-full"
       >
