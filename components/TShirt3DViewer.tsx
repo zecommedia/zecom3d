@@ -525,7 +525,7 @@ const TShirt3DViewer: React.FC<TShirt3DViewerProps> = ({ newImageBase64, onApply
         // Using exact cropInfo from "shirt finale.json" preset
         
         // Front crop: x=317, y=18.59375, width=210, height=435
-        const frontCropped = await applyCropToImage(resizedImage, { x: 317, y: 18.59375, width: 210, height: 435 });
+        const frontCropped = await applyCropToImage(resizedImage, { x: 298, y: 18.59375, width: 200, height: 435 });
         
         // Back crop: x=2, y=17, width=273, height=441
         const backCropped = await applyCropToImage(resizedImage, { x: 2, y: 17, width: 273, height: 441 });
@@ -559,7 +559,7 @@ const TShirt3DViewer: React.FC<TShirt3DViewerProps> = ({ newImageBase64, onApply
           visible: true,
           position: [-0.23, -0.08, 0.01],
           rotation: [0.058407346410207, 0.008407346410207, 0.008407346410207],
-          scale: [0.2, 0.65, 1.5],
+          scale: [0.25, 0.65, 1.5],
           borderRadius: 0,
           layerType: 'image',
           color: null,
@@ -588,7 +588,7 @@ const TShirt3DViewer: React.FC<TShirt3DViewerProps> = ({ newImageBase64, onApply
           image: backCropped,
           visible: true,
           position: [0, 0, -0.12],
-          rotation: [0, 0, 0],
+          rotation: [0, 3.108, 0],
           scale: [0.35, 0.75, 0.2],
           borderRadius: 0,
           layerType: 'image',
@@ -602,9 +602,9 @@ const TShirt3DViewer: React.FC<TShirt3DViewerProps> = ({ newImageBase64, onApply
           id: 4,  // Fixed ID
           image: frontCropped,
           visible: true,
-          position: [0.012, 0, 0.07],
+          position: [0, 0, 0.07],
           rotation: [0, 0, 0],
-          scale: [0.35, 0.7, 0.2],
+          scale: [0.32, 0.7, 0.2],
           borderRadius: 0,
           layerType: 'image',
           color: null,

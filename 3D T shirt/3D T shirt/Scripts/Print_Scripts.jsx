@@ -6,8 +6,8 @@ app.preferences.rulerUnits = Units.PIXELS;
 app.preferences.typeUnits  = TypeUnits.PIXELS;
 
 /* ================== PATHS ================== */
-var PSD_FILE = new File("D:/Zecom AutoAgents/POD Project/3D T shirt/Mockup/PRINT.psd");
-var IMG_FILE = new File("D:/Zecom AutoAgents/POD Project/3D T shirt/Mockup/temp.png");
+var PSD_FILE = new File("D:/Zecom AutoAgents/zecom3d/3D T shirt/3D T shirt/Mockup/PRINT.psd");
+var IMG_FILE = new File("D:/Zecom AutoAgents/zecom3d/3D T shirt/3D T shirt/Mockup/temp.png");
 var SO_LAYER_NAME = "REPLACE HERE";
 var COLOR_LAYER_NAME = "COLOR";
 
